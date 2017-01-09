@@ -65,7 +65,7 @@ gather_kernel_simple(const unsigned int *const __restrict__ position,
                      const size_t n) {
   for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < n;
        i += gridDim.x * blockDim.x) {
-    out1[i] = in1[position[i]];
+      cub::ThreadStore<cub::STORE_WT>(out1 + i, cub::ThreadLoad<cub::LOAD_CA>(in1 + position[i]));
   }
 }
 
@@ -76,7 +76,7 @@ gather_kernel_temp(const unsigned int *const __restrict__ position,
                    const size_t n) {
   for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < n;
        i += gridDim.x * blockDim.x) {
-    tmp[i] = data[position[i]];
+      cub::ThreadStore<cub::STORE_WT>(tmp + i, cub::ThreadLoad<cub::LOAD_CA>(data + position[i]));
   }
 
   __syncthreads();
