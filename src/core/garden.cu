@@ -82,7 +82,7 @@ __global__ void gather(const unsigned int *const __restrict__ position,
     trove::coalesced_ptr<T> s(in);
     trove::coalesced_ptr<T> r(out);
     T data = s[index];
-    r[index] = data;
+    r[i] = data;
   }
 }
 
