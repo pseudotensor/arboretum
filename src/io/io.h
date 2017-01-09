@@ -21,14 +21,11 @@ public:
       int, thrust::cuda::experimental::pinned_allocator<int>>>
       sparse_index;
 
-  std::vector<std::vector<float>> data;
-
   std::vector<thrust::host_vector<
-      float, thrust::cuda::experimental::pinned_allocator<float>>>
-      sorted_data;
+      float, thrust::cuda::experimental::pinned_allocator<float>>> data;
 
   std::vector<thrust::device_vector<unsigned int>> index_device;
-  std::vector<thrust::device_vector<float>> sorted_data_device;
+  std::vector<thrust::device_vector<float>> data_device;
 
   std::vector<thrust::host_vector<
       unsigned int, thrust::cuda::experimental::pinned_allocator<unsigned int>>>

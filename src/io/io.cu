@@ -13,10 +13,9 @@ DataMatrix::DataMatrix(int rows, int columns)
     : rows(rows), columns(columns), columns_dense(columns), columns_sparse(0) {
   _init = false;
   data.resize(columns);
-  sorted_data.resize(columns);
   index.resize(columns);
   index_device.resize(columns);
-  sorted_data_device.resize(columns);
+  data_device.resize(columns);
 
   for (int i = 0; i < columns; ++i) {
     data[i].resize(rows);
@@ -32,14 +31,6 @@ void DataMatrix::Init() {
       index[i] = SortedIndex(i);
     }
 
-    for (size_t i = 0; i < columns_dense; ++i) {
-      std::vector<float> tmp(data[i].size());
-#pragma omp parallel for simd
-      for (size_t j = 0; j < rows; ++j) {
-        tmp[j] = data[i][index[i][j]];
-      }
-      sorted_data[i] = tmp;
-    }
     _init = true;
   }
 }
@@ -71,10 +62,10 @@ void DataMatrix::TransferToGPU(size_t free, bool verbose) {
   free -= copy_count * index_size;
   copy_count = std::min(free / data_size, columns_dense);
   for (size_t i = 0; i < copy_count; ++i) {
-    sorted_data_device[i].resize(rows + 1);
-    sorted_data_device[i][0] = -std::numeric_limits<float>::infinity();
-    thrust::copy(sorted_data[i].begin(), sorted_data[i].end(),
-                 sorted_data_device[i].begin() + 1);
+    data_device[i].resize(rows + 1);
+    data_device[i][0] = -std::numeric_limits<float>::infinity();
+    thrust::copy(data[i].begin(), data[i].end(),
+                 data_device[i].begin() + 1);
   }
   if (verbose)
     printf("copied features data %ld from %ld \n", copy_count, columns_dense);
