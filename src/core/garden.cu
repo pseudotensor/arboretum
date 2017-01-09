@@ -19,6 +19,8 @@
 #include <thrust/sort.h>
 #include <thrust/system/cuda/execution_policy.h>
 #include <thrust/system/cuda/experimental/pinned_allocator.h>
+#include <trove/aos.h>
+#include <trove/ptr.h>
 
 namespace arboretum {
 namespace core {
@@ -48,7 +50,8 @@ struct GainFunctionParameters {
 };
 
 __forceinline__ __device__ unsigned long long int
-updateAtomicMax(unsigned long long int *address, float val1, unsigned int val2) {
+updateAtomicMax(unsigned long long int *address, float val1,
+                unsigned int val2) {
   my_atomics loc, loctest;
   loc.floats[0] = val1;
   loc.ints[1] = val2;
@@ -65,7 +68,21 @@ gather_kernel_simple(const unsigned int *const __restrict__ position,
                      const size_t n) {
   for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < n;
        i += gridDim.x * blockDim.x) {
-      cub::ThreadStore<cub::STORE_WT>(out1 + i, cub::ThreadLoad<cub::LOAD_CA>(in1 + position[i]));
+    out1[i] = in1[position[i]];
+  }
+}
+
+template <class T>
+__global__ void gather(const unsigned int *const __restrict__ position,
+                        T *in, T *out,
+                       const size_t n) {
+  for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < n;
+       i += gridDim.x * blockDim.x) {
+    const unsigned int index = position[i];
+    trove::coalesced_ptr<T> s(in);
+    trove::coalesced_ptr<T> r(out);
+    T data = s[index];
+    r[index] = data;
   }
 }
 
@@ -76,7 +93,7 @@ gather_kernel_temp(const unsigned int *const __restrict__ position,
                    const size_t n) {
   for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < n;
        i += gridDim.x * blockDim.x) {
-      cub::ThreadStore<cub::STORE_WT>(tmp + i, cub::ThreadLoad<cub::LOAD_CA>(data + position[i]));
+    tmp[i] = data[position[i]];
   }
 
   __syncthreads();
@@ -323,15 +340,16 @@ public:
   }
 
   virtual size_t MemoryRequirementsPerRecord() override {
-    return (sizeof(node_type) +   // node
-           sizeof(grad_type) +  // grad_sorted
-            sizeof(sum_type) + // sum
-            sizeof(node_type) +  // segments
-            sizeof(node_type) +  // segments_sorted
-            sizeof(float) +      // fvalue
+    return (sizeof(node_type) +    // node
+            sizeof(grad_type) +    // grad_sorted
+            sizeof(sum_type) +     // sum
+            sizeof(node_type) +    // segments
+            sizeof(node_type) +    // segments_sorted
+            sizeof(float) +        // fvalue
             sizeof(unsigned int) + // position
-            sizeof(unsigned int) // position sorted
-            ) * overlap_depth;
+            sizeof(unsigned int)   // position sorted
+            ) *
+           overlap_depth;
   }
 
   virtual void InitGrowingTree(const size_t columns,
@@ -654,7 +672,7 @@ private:
         thrust::raw_pointer_cast(position_sorted[circular_fid].data()),
         data->rows, 0, level + 1, s));
 
-    gather_kernel_simple<<<gridSizeGather, blockSizeGather, 0, s>>>(
+    gather<<<gridSizeGather, blockSizeGather, 0, s>>>(
         thrust::raw_pointer_cast(position_sorted[circular_fid].data()),
         thrust::raw_pointer_cast(grad_d.data()),
         thrust::raw_pointer_cast(grad_sorted[circular_fid].data()), data->rows);
@@ -743,7 +761,7 @@ private:
         thrust::raw_pointer_cast(position_sorted[circular_fid].data()),
         feature_size, 0, level + 1, s));
 
-    gather_kernel_simple<<<gridSizeGather, blockSizeGather, 0, s>>>(
+    gather<<<gridSizeGather, blockSizeGather, 0, s>>>(
         thrust::raw_pointer_cast(position_sorted[circular_fid].data()),
         thrust::raw_pointer_cast(grad_d.data()),
         thrust::raw_pointer_cast(grad_sorted[circular_fid].data()),
@@ -923,43 +941,41 @@ void Garden::GrowTree(io::DataMatrix *data, float *grad) {
 
       if (param.depth + 1 <= sizeof(unsigned char) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned char, float,
-                                                    double>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned char, float, double>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned char, float,
-                                                    float>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned char, float, float>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned short) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned short,
-                                                    float, double>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned short, float, double>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned short,
-                                                    float, float>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned short, float, float>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned int) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned int, float,
-                                                    double>(
-              param, data, cfg, obj, verbose.booster);
-        } else {
           _builder =
-              new TaylorApproximationBuilder<unsigned int, float, float>(
+              new TaylorApproximationBuilder<unsigned int, float, double>(
                   param, data, cfg, obj, verbose.booster);
+        } else {
+          _builder = new TaylorApproximationBuilder<unsigned int, float, float>(
+              param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned long int) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned long int,
-                                                    float, double>(
-              param, data, cfg, obj, verbose.booster);
-        } else {
           _builder =
-              new TaylorApproximationBuilder<unsigned int, float, float>(
+              new TaylorApproximationBuilder<unsigned long int, float, double>(
                   param, data, cfg, obj, verbose.booster);
+        } else {
+          _builder = new TaylorApproximationBuilder<unsigned int, float, float>(
+              param, data, cfg, obj, verbose.booster);
         }
       } else
         throw "unsupported depth";
@@ -972,43 +988,43 @@ void Garden::GrowTree(io::DataMatrix *data, float *grad) {
 
       if (param.depth + 1 <= sizeof(unsigned char) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned char,
-                                                    float2, mydouble2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned char, float2, mydouble2>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned char,
-                                                    float2, float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned char, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned short) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned short,
-                                                    float2, mydouble2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned short, float2, mydouble2>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned short,
-                                                    float2, float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned short, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned int) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned int, float2,
-                                                    mydouble2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned int, float2, mydouble2>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned int, float2,
-                                                    float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned int, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned long int) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned long int,
-                                                    float2, mydouble2>(
+          _builder = new TaylorApproximationBuilder<unsigned long int, float2,
+                                                    mydouble2>(
               param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned long int,
-                                                    float2, float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned long int, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else
         throw "unsupported depth";
@@ -1020,43 +1036,43 @@ void Garden::GrowTree(io::DataMatrix *data, float *grad) {
 
       if (param.depth + 1 <= sizeof(unsigned char) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned char,
-                                                    float2, mydouble2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned char, float2, mydouble2>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned char,
-                                                    float2, float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned char, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned short) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned short,
-                                                    float2, mydouble2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned short, float2, mydouble2>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned short,
-                                                    float2, float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned short, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned int) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned int, float2,
-                                                    mydouble2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned int, float2, mydouble2>(
+                  param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned int, float2,
-                                                    float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned int, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       } else if (param.depth + 1 <= sizeof(unsigned long int) * CHAR_BIT) {
         if (cfg.double_precision) {
-          _builder = new TaylorApproximationBuilder<unsigned long int,
-                                                    float2, mydouble2>(
+          _builder = new TaylorApproximationBuilder<unsigned long int, float2,
+                                                    mydouble2>(
               param, data, cfg, obj, verbose.booster);
         } else {
-          _builder = new TaylorApproximationBuilder<unsigned long int,
-                                                    float2, float2>(
-              param, data, cfg, obj, verbose.booster);
+          _builder =
+              new TaylorApproximationBuilder<unsigned long int, float2, float2>(
+                  param, data, cfg, obj, verbose.booster);
         }
       }
 

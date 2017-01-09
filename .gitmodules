@@ -4,3 +4,6 @@
 [submodule "_json"]
 	path = _json
 url=https://github.com/nlohmann/json.git
+[submodule "_trove"]
+	path = _trove
+	url = https://github.com/bryancatanzaro/trove.git
