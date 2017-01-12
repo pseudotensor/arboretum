@@ -68,8 +68,9 @@ __global__ void gather_kernel(const unsigned int *const __restrict__ position,
                               const size_t n) {
   for (size_t i = blockDim.x * blockIdx.x + threadIdx.x; i < n;
        i += gridDim.x * blockDim.x) {
-    out1[i] = in1[position[i]];
-    out2[i] = in2[position[i]];
+    const unsigned int pos = position[i];
+    out1[i] = cub::ThreadLoad<cub::LOAD_LDG>(in1 + pos);
+    out2[i] = cub::ThreadLoad<cub::LOAD_LDG>(in2 + pos);
   }
 }
 
@@ -693,8 +694,7 @@ private:
         thrust::raw_pointer_cast(fvalue_sorted[circular_fid].data()),
         thrust::raw_pointer_cast(segments_sorted[circular_fid].data()),
         thrust::raw_pointer_cast(parent_node_sum.data()),
-        thrust::raw_pointer_cast(parent_node_count.data()),
-        data->rows,
+        thrust::raw_pointer_cast(parent_node_count.data()), data->rows,
         gain_param, results[circular_fid]);
 
     cudaMemcpyAsync(results_h[circular_fid], results[circular_fid],
